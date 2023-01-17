@@ -17,16 +17,18 @@
 #                                                                             +
 #=============================================================================+
 
+DISPLAY=":1"
+export DISPLAY
 
-TWS_MAJOR_VRSN=972
-IBC_INI=~/ibc/config.ini
-TRADING_MODE=
-IBC_PATH=/opt/ibc
+TWS_MAJOR_VRSN=978
+IBC_INI=~/IBC/resources/config.ini
+#TRADING_MODE=
+IBC_PATH=~/IBC/resources
 TWS_PATH=~/Jts
 TWS_SETTINGS_PATH=
-LOG_PATH=~/ibc/logs
-TWSUSERID=
-TWSPASSWORD=
+#LOG_PATH=~/ibc.logs
+#TWSUSERID=
+#TWSPASSWORD=
 FIXUSERID=
 FIXPASSWORD=
 JAVA_PATH=
