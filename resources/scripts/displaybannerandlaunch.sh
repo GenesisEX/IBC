@@ -3,7 +3,9 @@
 # get the IBC version
 read IBC_VRSN < "${IBC_PATH}/version"
 
-if [[ -n "$LOG_PATH" ]]; then
+if [[ -z ${LOG_PATH+x} ]]; then
+	:
+elif [[ -n "$LOG_PATH" ]]; then
 	if [[ ! -e  "$LOG_PATH" ]]; then
 		mkdir -p "$LOG_PATH"
 	fi
@@ -55,13 +57,20 @@ export IBC_VRSN
 # forward signals (see https://veithen.github.io/2014/11/16/sigterm-propagation.html)
 trap 'kill -TERM $PID' TERM INT
 
+if [[ -z ${LOG_PATH+x} ]]; then
 "${IBC_PATH}/scripts/ibcstart.sh" "${TWS_MAJOR_VRSN}" ${gw_flag} \
      "--tws-path=${TWS_PATH}" "--tws-settings-path=${TWS_SETTINGS_PATH}" \
      "--ibc-path=${IBC_PATH}" "--ibc-ini=${IBC_INI}" \
      "--user=${TWSUSERID}" "--pw=${TWSPASSWORD}" "--fix-user=${FIXUSERID}" "--fix-pw=${FIXPASSWORD}" \
-     "--java-path=${JAVA_PATH}" "--mode=${TRADING_MODE}" \
+     "--java-path=${JAVA_PATH}" "--mode=${TRADING_MODE}" "--on2fatimeout=${TWOFA_TIMEOUT_ACTION}"
+else
+"${IBC_PATH}/scripts/ibcstart.sh" "${TWS_MAJOR_VRSN}" ${gw_flag} \
+     "--tws-path=${TWS_PATH}" "--tws-settings-path=${TWS_SETTINGS_PATH}" \
+     "--ibc-path=${IBC_PATH}" "--ibc-ini=${IBC_INI}" \
+     "--user=${TWSUSERID}" "--pw=${TWSPASSWORD}" "--fix-user=${FIXUSERID}" "--fix-pw=${FIXPASSWORD}" \
+     "--java-path=${JAVA_PATH}" "--mode=${TRADING_MODE}" "--on2fatimeout=${TWOFA_TIMEOUT_ACTION}" \
      >> "${log_file}" 2>&1 &
-
+fi
 PID=$!
 wait $PID
 trap - TERM INT
@@ -72,7 +81,10 @@ if [ "$exit_code" == "0" ]; then
 	echo -e "${light_green}+ ${APP} ${TWS_MAJOR_VRSN} has finished"
 	echo "+"
 	echo -e "+==============================================================================${normal}"
-elif [ "$exit_code" == "143" ]; then
+	exit 0
+fi
+
+if [ "$exit_code" == "143" ]; then
 	# exit code 143 caused by default signal handler for SIGTERM
 	exit_code=0
 	echo -e "${light_green}+"
@@ -81,20 +93,35 @@ elif [ "$exit_code" == "143" ]; then
 	echo -e "${light_green}+ ${APP} ${TWS_MAJOR_VRSN} has finished"
 	echo "+"
 	echo -e "+==============================================================================${normal}"
-else
-	echo -e "${light_red}+=============================================================================="
-	echo "+"
-	echo -e "+                       **** An error has occurred ****"
-	if [[ -n LOG_PATH ]]; then
-		echo "+"
-		echo "+                     Please look in the diagnostics file "
-		echo "+                   mentioned above for further information"
-	fi
-	echo "+"
-  echo "+                           Press enter to continue."
-	echo "+"
-	echo -e "+==============================================================================${normal}"
-	read
+	exit 0
 fi
+
+if [ "$exit_code" == "$((1111 % 256))" ]; then
+	# exit code set by IBC if second factor authentication dialog times out and
+	# ExitAfterSecondFactorAuthenticationTimeout setting is true, but IBC wasn't
+	# restarted
+	echo "Second factor authentication dialog has timed out, IBC not restarted"
+	if [[ "$(echo ${TWOFA_TIMEOUT_ACTION} | tr '[:lower:]' '[:upper:]')" = "EXIT" ]]; then
+		# this is an expected situation so exit without error message
+		echo -e "${light_green}+"
+		echo "+"
+		echo -e "+==============================================================================${normal}"
+		exit 0
+	fi
+fi
+
+echo -e "${light_red}+=============================================================================="
+echo "+"
+echo -e "+                       **** An error has occurred ****"
+if [[ -n LOG_PATH ]]; then
+	echo "+"
+	echo "+                     Please look in the diagnostics file "
+	echo "+                   mentioned above for further information"
+fi
+echo "+"
+echo "+                           Press enter to continue."
+echo "+"
+echo -e "+==============================================================================${normal}"
+read
 
 exit $exit_code

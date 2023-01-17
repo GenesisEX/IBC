@@ -16,44 +16,45 @@ echo +
 
 :: determine the logfile path and name (if any)
 if defined LOG_PATH (
-	if not exist "%LOG_PATH%" (
-		set PHASE=Creating logfile folder
-		mkdir "%LOG_PATH%"
-		if errorlevel 1 goto :err
-	)
-	
-	set README=%LOG_PATH%\README.txt
-	if not exist "!README!" (
-		set PHASE=Creating README file
-		(echo You can delete the files in this folder at any time
-		echo.
-		echo Windows will inform you if a file is currently in use
-		echo when you try to delete it.) > "!README!" || set REDIRECTERROR=1
-	
-		if "!REDIRECTERROR!" == "1" goto :err
-	)
-
-	call "%IBC_PATH%\scripts\getDayOfWeek.bat"
-	set LOG_FILE=%LOG_PATH%\IBC-%IBC_VRSN%_%APP%-%TWS_MAJOR_VRSN%_!DAYOFWEEK!.txt
-	if exist "!LOG_FILE!" (
-		for %%? in (!LOG_FILE!) do (
-			set LOGFILETIME=%%~t?
+	if /I "%LOG_PATH%"=="CON" (
+		set LOG_FILE=CON
+	) else (
+		if not exist "%LOG_PATH%" (
+			set PHASE=Creating logfile folder
+			mkdir "%LOG_PATH%"
+			if errorlevel 1 goto :err
 		)
-		set s=%DATE%!LOGFILETIME:*%DATE%=!
-		if not "!s!" == "!LOGFILETIME!" del "!LOG_FILE!"
+	
+		set README=%LOG_PATH%\README.txt
+		if not exist "!README!" (
+			set PHASE=Creating README file
+			(echo You can delete the files in this folder at any time
+			echo.
+			echo Windows will inform you if a file is currently in use
+			echo when you try to delete it.) > "!README!" || set REDIRECTERROR=1
+	
+			if "!REDIRECTERROR!" == "1" goto :err
+		)
+
+		call "%IBC_PATH%\scripts\getDayOfWeek.bat"
+		set LOG_FILE=%LOG_PATH%\IBC-%IBC_VRSN%_%APP%-%TWS_MAJOR_VRSN%_!DAYOFWEEK!.txt
+		if exist "!LOG_FILE!" (
+			for %%? in (!LOG_FILE!) do (
+				set LOGFILETIME=%%~t?
+			)
+			set s=%DATE%!LOGFILETIME:*%DATE%=!
+			if not "!s!" == "!LOGFILETIME!" del "!LOG_FILE!"
+		)
 	)
-) else (
-	set LOG_FILE=NUL
 )
 
-:: if defined LOG_PATH (
+if defined LOG_PATH (
 	echo + Diagnostic information is logged in:
 	echo +
 	echo + %LOG_FILE%
 	echo +
 
 	:: check that the logfile is accessible
-
 	set PHASE=Checking logfile accessiblity
 	(echo.
 	echo ================================================================================
@@ -65,7 +66,10 @@ if defined LOG_PATH (
 	echo.) >> "%LOG_FILE%" || set REDIRECTERROR=1
 	
 	if "%REDIRECTERROR%" == "1" goto :err
-:: )
+) else (
+	set LOG_FILE=NUL
+)
+
 
 echo +
 echo + ** Caution: closing this window will close %APP% %TWS_MAJOR_VRSN% **
@@ -83,7 +87,7 @@ call "%IBC_PATH%\scripts\StartIBC.bat" "%TWS_MAJOR_VRSN%" %GW_FLAG% ^
      "/TwsPath:%TWS_PATH%" "/TwsSettingsPath:%TWS_SETTINGS_PATH%" ^
 	 "/IbcPath:%IBC_PATH%" "/Config:%CONFIG%" ^
      "/User:%TWSUSERID%" "/PW:%TWSPASSWORD%" "/FIXUser:%FIXUSERID%" "/FIXPW:%FIXPASSWORD%" ^
-     "/JavaPath:%JAVA_PATH%" "/Mode:%TRADING_MODE%" ^
+     "/JavaPath:%JAVA_PATH%" "/Mode:%TRADING_MODE%" "/On2FATimeout:%TWOFA_TIMEOUT_ACTION%" ^
      >> "%LOG_FILE%" 2>&1
 
 :: note that killing the Java process sets ERRORLEVEL to 1, but we don't want to trap
@@ -91,6 +95,7 @@ call "%IBC_PATH%\scripts\StartIBC.bat" "%TWS_MAJOR_VRSN%" %GW_FLAG% ^
 :: so there shouldn't be any other reason for ERRORLEVEL to be 1
 if errorlevel 2 goto :err
 
+:exit
 if defined LOG_PATH (
 	(echo IBC running %APP% %TWS_MAJOR_VRSN% has finished at %DATE% %TIME%
 	echo.) >> "%LOG_FILE%"
@@ -101,7 +106,21 @@ if "%INLINE%" == "1" exit /B
 exit
 
 :err
+
 set ERRORCODE=%ERRORLEVEL%
+
+IF "%ERRORCODE%"=="1111" (
+	:: errorlevel set by IBC if second factor authentication dialog times out and
+	:: ExitAfterSecondFactorAuthenticationTimeout setting is true, but IBC wasn't
+	:: restarted
+	echo Second factor authentication dialog has timed out, IBC not restarted
+	if /I "%TWOFA_TIMEOUT_ACTION%"=="exit" (
+		:: this is an expected situation so exit without error message
+		goto :exit
+	)
+	set "ERROR_MESSAGE=TWOFA_TIMEOUT_ACTION is set to %TWOFA_TIMEOUT_ACTION%: something wrong here!"
+)
+
 color 0C
 echo +==============================================================================
 echo +

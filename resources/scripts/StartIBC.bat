@@ -31,6 +31,7 @@ echo              [/Config:configfile] [/JavaPath:javaPath]
 echo              [/User:userId] [/PW:password]
 echo              [/FIXUser:fixuserId] [/FIXPW:fixpassword]
 echo              [/Mode:tradingMode]
+echo              [/On2FATimeout:2fatimeoutaction]
 echo.
 echo   twsVersion              The major version number for TWS
 echo.
@@ -38,17 +39,17 @@ echo   /G or /Gateway          Indicates that the IB Gateway is to be loaded rat
 echo                           than TWS
 echo.
 echo   twsPath                 Path to the TWS installation folder. Defaults to
-echo                           C:\Jts
+echo                           %SYSTEMDRIVE%\Jts
 echo.
 echo   twsSettingsPath         Path to the TWS settings folder. Defaults to
 echo                           the twsPath argument
 echo.
 echo   ibcPath                 Path to the IBC installation folder.
-echo                           Defaults to C:\IBC
+echo                           Defaults to %SYSTEMDRIVE%\IBC
 echo.
 echo   configfile              The location and filename of the IBC 
 echo                           configuration file. Defaults to 
-echo                           ^%%HOMEPATH^%%\Documents\IBC\config.ini
+echo                           ^%%USERPROFILE^%%\Documents\IBC\config.ini
 echo.
 echo   javaPath                Path to the folder containing the java.exe to be used
 echo                           to run IBC. Defaults to the java.exe included
@@ -71,6 +72,12 @@ echo                               paper
 echo.
 echo                           These values are not case-sensitive.
 echo.
+echo   2fatimeoutaction       Indicates what to do if IBC exits due to second factor
+echo                          authentication timeout. Allowed values are:
+echo
+echo                               restart
+echo                               exit
+echo.
 exit /B
 ::===0=========1=========2=========3=========4=========5=========6=========7=========8
 
@@ -87,11 +94,21 @@ set E_CONFIG_NOT_EXIST=1006
 set E_TWS_VMOPTIONS_NOT_FOUND=1007
 set E_TWS_SETTINGS_PATH_NOT_EXIST=1008
 
+:: errorlevel set by IBC if second factor authentication dialog times out and
+:: ExitAfterSecondFactorAuthenticationTimeout setting is true
+set E_2FA_DIALOG_TIMED_OUT=1111
+
+:: errorlevel set by IBC if login dialog is not displayed within the time
+:: specified in the LoginDialogDisplayTimeout setting
+set E_LOGIN_DIALOG_DISPLAY_TIMEOUT=1112
+
 set ENTRY_POINT_TWS=ibcalpha.ibc.IbcTws
 set ENTRY_POINT_GATEWAY=ibcalpha.ibc.IbcGateway
 
 :: Variables to be derived from arguments
 set TWS_VERSION=
+set PROGRAM=TWS
+set PROGRAM_PATH=
 set ENTRY_POINT=%ENTRY_POINT_TWS%
 set TWS_PATH=
 set TWS_SETTINGS_PATH=
@@ -103,6 +120,7 @@ set IB_PASSWORD=
 set FIX_USER_ID=
 set FIX_PASSWORD=
 set MODE=
+set TWOFA_TO_ACTION=
 
 set ERROR_MESSAGE=
 
@@ -116,8 +134,10 @@ if "%~1" == "" goto :parsingComplete
 set ARG=%~1
 if /I "%ARG%" == "/G" (
 	set ENTRY_POINT=%ENTRY_POINT_GATEWAY%
+	set PROGRAM=Gateway
 ) else if /I "%ARG%" == "/GATEWAY" (
 	set ENTRY_POINT=%ENTRY_POINT_GATEWAY%
+	set PROGRAM=Gateway
 ) else if /I "%ARG:~0,9%" == "/TWSPATH:" (
 	set TWS_PATH=%ARG:~9%
 ) else if /I "%ARG:~0,17%" == "/TWSSETTINGSPATH:" (
@@ -139,6 +159,8 @@ if /I "%ARG%" == "/G" (
 	set FIX_PASSWORD=%ARG:~7%
 ) else if /I "%ARG:~0,6%" == "/MODE:" (
 	set MODE=%ARG:~6%
+) else if /I "%ARG:~0,14%" == "/ON2FATIMEOUT:" (
+	set TWOFA_TO_ACTION=%ARG:~14%
 ) else if /I "%ARG:~0,1%" == "/" (
 	set ERROR_MESSAGE=Invalid parameter '%ARG%'
 	set ERROR=%E_INVALID_ARG%
@@ -162,7 +184,7 @@ if defined FIX_USER_ID set GOT_FIX_CREDENTIALS=1
 if defined FIX_PASSWORD set GOT_FIX_CREDENTIALS=1
 
 if defined GOT_FIX_CREDENTIALS (
-	if not "%ENTRY_POINT%" == "%ENTRY_POINT_GATEWAY%" (
+	if not "%PROGRAM%" == "GATEWAY" (
 		set ERROR_MESSAGE=FIX user id and FIX password are only valid for the Gateway
 		set ERROR=%E_INVALID_ARG%
 	)
@@ -174,7 +196,18 @@ if defined MODE (
 	) else if /I "%MODE%" == "PAPER" (
 		echo. > NUL
 	) else (
-		set ERROR_MESSAGE=Trading mode set to %MODE% but must be either 'live' or 'paper'
+		set ERROR_MESSAGE=Trading mode set to '%MODE%' but must be either 'live' or 'paper'
+		set ERROR=%E_INVALID_ARG%
+	)
+)
+
+if defined TWOFA_TO_ACTION (
+	if /I "%TWOFA_TO_ACTION%" == "RESTART" (
+		echo. > NUL
+	) else if /I "%TWOFA_TO_ACTION%" == "EXIT" (
+		echo. > NUL
+	) else (
+		set ERROR_MESSAGE=2FA timeout action set to %TWOFA_TO_ACTION% but must be either 'restart' or 'exit'
 		set ERROR=%E_INVALID_ARG%
 	)
 )
@@ -194,6 +227,7 @@ echo.
 echo Arguments:
 echo.
 echo TWS version = %TWS_VERSION%
+echo Program = %PROGRAM%
 echo Entry point = %ENTRY_POINT%
 echo /TwsPath = %TWS_PATH%
 echo /TwsSettingsPath = %TWS_SETTINGS_PATH%
@@ -226,48 +260,36 @@ if not defined TWS_VERSION (
 	goto :err
 )
 
-if not defined TWS_PATH set TWS_PATH=C:\Jts
+if not defined TWS_PATH set TWS_PATH=%SYSTEMDRIVE%\Jts
 if not defined TWS_SETTINGS_PATH set TWS_SETTINGS_PATH=%TWS_PATH%
-if not defined IBC_PATH set IBC_PATH=C:\IBC
-if not defined CONFIG set CONFIG=%HOMEPATH%\Documents\IBC\config.ini
+if not defined IBC_PATH set IBC_PATH=%SYSTEMDRIVE%\IBC
+if not defined CONFIG set CONFIG=%USERPROFILE%\Documents\IBC\config.ini
 
-:: In the following we try to use the correct .vmoptions file for the chosen entrypoint
-:: Note that uninstalling TWS or Gateway leaves the relevant .vmoption file in place, so
-:: we can still use the correct one.
-if /I "%ENTRY_POINT%" == "%ENTRY_POINT_TWS%" (
-	if exist "%TWS_PATH%\%TWS_VERSION%\tws.vmoptions" (
-		set TWS_VMOPTS=%TWS_PATH%\%TWS_VERSION%\tws.vmoptions 
-	) else if exist "%TWS_PATH%\ibgateway\%TWS_VERSION%\ibgateway.vmoptions" (
-		set TWS_VMOPTS=%TWS_PATH%\ibgateway\%TWS_VERSION%\ibgateway.vmoptions 
-	) 
+set TWS_PROGRAM_PATH=%TWS_PATH%\%TWS_VERSION%
+set GATEWAY_PROGRAM_PATH=%TWS_PATH%\ibgateway\%TWS_VERSION%
 
-	if exist "%TWS_PATH%\%TWS_VERSION%\jars" (
-		set TWS_JARS=%TWS_PATH%\%TWS_VERSION%\jars
-		set INSTALL4J=%TWS_PATH%\%TWS_VERSION%\.install4j
-	) else (
-		set TWS_JARS=%TWS_PATH%\ibgateway\%TWS_VERSION%\jars
-		set INSTALL4J=%TWS_PATH%\ibgateway\%TWS_VERSION%\.install4j
-	)
-)
-if /I "%ENTRY_POINT%" == "%ENTRY_POINT_GATEWAY%" (
-	if exist "%TWS_PATH%\ibgateway\%TWS_VERSION%\ibgateway.vmoptions" (
-		set TWS_VMOPTS=%TWS_PATH%\ibgateway\%TWS_VERSION%\ibgateway.vmoptions 
-	) else if exist "%TWS_PATH%\%TWS_VERSION%\tws.vmoptions" (
-		set TWS_VMOPTS=%TWS_PATH%\%TWS_VERSION%\tws.vmoptions 
-	) 
-
-	if exist "%TWS_PATH%\ibgateway\%TWS_VERSION%\jars" (
-		set TWS_JARS=%TWS_PATH%\ibgateway\%TWS_VERSION%\jars
-		set INSTALL4J=%TWS_PATH%\ibgateway\%TWS_VERSION%\.install4j
-	) else (
-		set TWS_JARS=%TWS_PATH%\%TWS_VERSION%\jars
-		set INSTALL4J=%TWS_PATH%\%TWS_VERSION%\.install4j
-	)
+if "%PROGRAM%" == "TWS" (
+	set PROGRAM_PATH=%TWS_PROGRAM_PATH%
+	set ALT_PROGRAM_PATH=%GATEWAY_PROGRAM_PATH%
+	set VMOPTIONS_SOURCE=!PROGRAM_PATH!\tws.vmoptions
+	set ALT_VMOPTIONS_SOURCE=!ALT_PROGRAM_PATH!\ibgateway.vmoptions
+) else (
+	set PROGRAM_PATH=%GATEWAY_PROGRAM_PATH%
+	set ALT_PROGRAM_PATH=%TWS_PROGRAM_PATH%
+	set VMOPTIONS_SOURCE=!PROGRAM_PATH!\ibgateway.vmoptions
+	set ALT_VMOPTIONS_SOURCE=!ALT_PROGRAM_PATH!\tws.vmoptions
 )
 
-if not exist "%TWS_JARS%" (
-	set ERROR_MESSAGE=TWS version %TWS_VERSION% is not installed
-	set ERROR_MESSAGE1=You must install the offline version of TWS/Gateway
+if not exist "%PROGRAM_PATH%\JARS" (
+	set PROGRAM_PATH=%ALT_PROGRAM_PATH%
+	set VMOPTIONS_SOURCE=%ALT_VMOPTIONS_SOURCE%
+)
+set JARS=%PROGRAM_PATH%\jars
+set INSTALL4J=%PROGRAM_PATH%\.install4j
+
+if not exist "%JARS%" (
+	set ERROR_MESSAGE=Offline TWS/Gateway version %TWS_VERSION% is not installed: can't find jars folder
+	set ERROR_MESSAGE1=Make sure you install the offline version of TWS/Gateway
 	set ERROR_MESSAGE2=IBC does not work with the auto-updating TWS/Gateway
 	set ERROR=%E_TWS_VERSION_NOT_INSTALLED%
 	goto :err
@@ -289,8 +311,9 @@ if not defined CONFIG (
 	set ERROR=%E_CONFIG_NOT_EXIST%
 	goto :err
 )
-if not exist "%TWS_VMOPTS%" (  
-	set ERROR_MESSAGE=%TWS_VMOPTS% does not exist  
+if not exist "%VMOPTIONS_SOURCE%" (  
+	echo "%VMOPTIONS_SOURCE%" does not exist
+	set ERROR_MESSAGE=Neither tws.vmoptions nor ibgateway.vmoptions could be found
 	set ERROR=%E_TWS_VMOPTIONS_NOT_FOUND%
 	goto :err
 )
@@ -312,11 +335,11 @@ echo Generating the classpath
 set PHASE=Generating the classpath
 
 set IBC_CLASSPATH=
-for %%i in (%TWS_JARS%\*.jar) do (
+for %%i in (%JARS%\*.jar) do (
     if not "!IBC_CLASSPATH!"=="" set IBC_CLASSPATH=!IBC_CLASSPATH!;
     set IBC_CLASSPATH=!IBC_CLASSPATH!%%i
 )
-set IBC_CLASSPATH=%IBC_CLASSPATH%;%IBC_PATH%\IBC.jar
+set IBC_CLASSPATH=%IBC_CLASSPATH%;%INSTALL4J%\i4jruntime.jar;%IBC_PATH%\IBC.jar
 echo Classpath=%IBC_CLASSPATH%
 echo.
 
@@ -326,13 +349,22 @@ echo Generating the JAVA VM options
 set PHASE=Generating the JAVA VM options
 
 set JAVA_VM_OPTIONS=
-for /f "tokens=1 delims= " %%i in (%TWS_VMOPTS%) do (
+for /f "tokens=1 delims= " %%i in (%VMOPTIONS_SOURCE%) do (
 	set TOKEN=%%i
 	if not "!TOKEN!"=="" (
 		if not "!TOKEN:~0,1!"=="#" set JAVA_VM_OPTIONS=!JAVA_VM_OPTIONS! %%i
 	)
 )
+set JAVA_VM_OPTIONS=%JAVA_VM_OPTIONS% -Dtwslaunch.autoupdate.serviceImpl=com.ib.tws.twslaunch.install4j.Install4jAutoUpdateService
+set JAVA_VM_OPTIONS=%JAVA_VM_OPTIONS% -Dchannel=latest
+set JAVA_VM_OPTIONS=%JAVA_VM_OPTIONS% -Dexe4j.isInstall4j=true
+set JAVA_VM_OPTIONS=%JAVA_VM_OPTIONS% -Dinstall4jType=standalone
+set JAVA_VM_OPTIONS=%JAVA_VM_OPTIONS% -DjtsConfigDir=%TWS_SETTINGS_PATH%
+
 echo Java VM Options=%JAVA_VM_OPTIONS%
+echo.
+
+call :GetAutoRestartOption
 echo.
 
 ::======================== Determine the location of java.exe ===============
@@ -382,31 +414,76 @@ if defined GOT_FIX_CREDENTIALS (
 )
 	
 
-if "%ENTRY_POINT%"=="%ENTRY_POINT_TWS%" (
-	set PROGRAM=TWS
-) else (
-	set PROGRAM=Gateway
-)
-echo Starting IBC with this command:
-echo "%JAVA_PATH%\java.exe" -cp  "%IBC_CLASSPATH%" %JAVA_VM_OPTIONS% %ENTRY_POINT% "%CONFIG%" %HIDDEN_CREDENTIALS% %MODE%
-echo.
-
 :: prevent other Java tools interfering with IBC
 set JAVA_TOOL_OPTIONS=
 
 pushd %TWS_SETTINGS_PATH%
 
+echo Renaming TWS or Gateway .exe file to prevent restart without IBC
+IF exist "%PROGRAM_PATH%\tws.exe" ren "%PROGRAM_PATH%\tws.exe" tws1.exe
+IF exist "%PROGRAM_PATH%\ibgateway.exe" ren "%PROGRAM_PATH%\ibgateway.exe" ibgateway1.exe
+echo .
+
+:startIBC
+
+echo.
+echo Starting IBC with this command:
+echo "%JAVA_PATH%\java.exe" -cp  "%IBC_CLASSPATH%" %JAVA_VM_OPTIONS% %AUTORESTART_OPTION% %ENTRY_POINT% "%CONFIG%" %HIDDEN_CREDENTIALS% %MODE%
+echo.
+
 if defined GOT_FIX_CREDENTIALS (
 	if defined GOT_API_CREDENTIALS (
-		"%JAVA_PATH%\java.exe" -cp  "%IBC_CLASSPATH%" %JAVA_VM_OPTIONS% %ENTRY_POINT% "%CONFIG%" "%FIX_USER_ID%" "%FIX_PASSWORD%" "%IB_USER_ID%" "%IB_PASSWORD%" %MODE%
+		"%JAVA_PATH%\java.exe" -cp  "%IBC_CLASSPATH%" %JAVA_VM_OPTIONS% %AUTORESTART_OPTION% %ENTRY_POINT% "%CONFIG%" "%FIX_USER_ID%" "%FIX_PASSWORD%" "%IB_USER_ID%" "%IB_PASSWORD%" %MODE%
 	) else (
-		"%JAVA_PATH%\java.exe" -cp  "%IBC_CLASSPATH%" %JAVA_VM_OPTIONS% %ENTRY_POINT% "%CONFIG%" "%FIX_USER_ID%" "%FIX_PASSWORD%" %MODE%
+		"%JAVA_PATH%\java.exe" -cp  "%IBC_CLASSPATH%" %JAVA_VM_OPTIONS% %AUTORESTART_OPTION% %ENTRY_POINT% "%CONFIG%" "%FIX_USER_ID%" "%FIX_PASSWORD%" %MODE%
 	)
 ) else if defined GOT_API_CREDENTIALS (
-		"%JAVA_PATH%\java.exe" -cp  "%IBC_CLASSPATH%" %JAVA_VM_OPTIONS% %ENTRY_POINT% "%CONFIG%" "%IB_USER_ID%" "%IB_PASSWORD%" %MODE%
+		"%JAVA_PATH%\java.exe" -cp  "%IBC_CLASSPATH%" %JAVA_VM_OPTIONS% %AUTORESTART_OPTION% %ENTRY_POINT% "%CONFIG%" "%IB_USER_ID%" "%IB_PASSWORD%" %MODE%
 ) else (
-		"%JAVA_PATH%\java.exe" -cp  "%IBC_CLASSPATH%" %JAVA_VM_OPTIONS% %ENTRY_POINT% "%CONFIG%" %MODE%
+		"%JAVA_PATH%\java.exe" -cp  "%IBC_CLASSPATH%" %JAVA_VM_OPTIONS% %AUTORESTART_OPTION% %ENTRY_POINT% "%CONFIG%" %MODE%
 )
+
+::======================== Handle IBC exit conditions ==============
+
+echo Program has exited
+echo Error level is %ERRORLEVEL%
+
+echo Check for 2FA dialog timed out
+if %ERRORLEVEL% EQU %E_2FA_DIALOG_TIMED_OUT% (
+	if /I "%TWOFA_TO_ACTION%" == "RESTART" (
+		echo IBC will restart shortly due to 2FA completion timeout
+		ping localhost -n 2  >NUL
+		goto :startIBC
+	) else (
+		echo 2FA completion timed-out but TWOFA_TO_ACTION=EXIT so not restarting IBC
+		goto :NormalExit
+	)
+)
+
+echo Check for login dialog display timeout
+if %ERRORLEVEL% EQU %E_LOGIN_DIALOG_DISPLAY_TIMEOUT% (
+	echo IBC will restart shortly due to login dialog display timeout
+	ping localhost -n 2  >NUL
+	goto :startIBC
+)
+
+echo Check for restart
+echo call :GetAutoRestartOption
+call :GetAutoRestartOption
+if defined AUTORESTART_OPTION (
+	echo IBC will autorestart shortly
+	ping localhost -n 2  >NUL
+	goto :startIBC
+)
+
+:NormalExit
+
+echo Renaming TWS or Gateway .exe file to original name
+IF exist "%PROGRAM_PATH%\tws1.exe" ren "%PROGRAM_PATH%\tws1.exe" tws.exe
+IF exist "%PROGRAM_PATH%\ibgateway1.exe" ren "%PROGRAM_PATH%\ibgateway1.exe" ibgateway.exe
+echo.
+
+echo Normal exit
 
 popd
 
@@ -415,6 +492,27 @@ echo %PROGRAM% finished at %DATE% %TIME%
 echo.
 
 exit /B %ERRORLEVEL%
+
+::======================== Subroutines =============================
+
+:GetAutoRestartOption
+
+echo Finding autorestart file
+
+set AUTORESTART_OPTION=
+for /f "usebackq" %%I in (`where /R %TWS_SETTINGS_PATH% autorestart`) do (
+	for %%A in ("%%~pI.") do set AUTORESTART_OPTION=-Drestart=%%~nxA
+)
+if not defined AUTORESTART_OPTION (
+	set AUTORESTART_OPTION=
+	echo autorestart file not found 
+) else (
+	for /f "usebackq" %%I in (`where /R %TWS_SETTINGS_PATH% autorestart`) do echo autorestart file found at %%~fI
+	echo AUTORESTART_OPTION is %AUTORESTART_OPTION%
+)
+goto :EOF
+
+::======================== Error termination =======================
 
 :err
 echo.

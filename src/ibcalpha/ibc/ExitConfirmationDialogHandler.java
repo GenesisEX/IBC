@@ -33,11 +33,12 @@ public class ExitConfirmationDialogHandler implements WindowHandler {
     }
 
     public void handleWindow(Window window, int eventID) {
-        if (StopTask.shutdownInProgress()) {
-            if (SwingUtils.clickButton(window, "Yes")) {
-            } else {
-                Utils.logError("could not ignore shutdown confirmation dialog because we could not find one of the controls.");
-            }
+        // we don't handle this dialog if it's not the result of 
+        // a StopTask running
+        if (!StopTask.shutdownInProgress()) return;
+        
+        if (!SwingUtils.clickButton(window, "Yes")) {
+            Utils.logError("could not ignore shutdown confirmation dialog because we could not find one of the controls.");
         }
     }
 
@@ -46,5 +47,5 @@ public class ExitConfirmationDialogHandler implements WindowHandler {
 
         return (SwingUtils.findLabel(window, "Are you sure you want to exit?") != null);
     }
-    
+
 }

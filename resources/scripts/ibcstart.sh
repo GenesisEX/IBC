@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Note that this command file is a 'service file' intended to be called from 
-# higher level command files. There should be no reason for the end user to modify 
+# Note that this command file is a 'service file' intended to be called from
+# higher level command files. There should be no reason for the end user to modify
 # it in any way. So PLEASE DON'T CHANGE IT UNLESS YOU KNOW WHAT YOU'RE DOING!
 
 showUsage () {
@@ -16,6 +16,7 @@ echo "             [--ibc-ini=ibcIni] [--java-path=javaPath]"
 echo "             [--user=userid] [--pw=password]"
 echo "             [--fix-user=fixuserid] [--fix-pw=fixpassword]"
 echo "             [--mode=tradingMode]"
+echo "             [--on2fatimeout=2fatimeoutaction]"
 echo
 echo "  twsVersion              The major version number for TWS"
 echo
@@ -46,7 +47,7 @@ echo "  password                IB account password"
 echo
 echo "  fixuserid               FIX account user id (only if -g or --gateway)"
 echo
-echo "  fixpassword             FIX account password (only if -g or --gateway)" 
+echo "  fixpassword             FIX account password (only if -g or --gateway)"
 echo
 echo "  tradingMode             Indicates whether the live account or the paper "
 echo "                          trading account will be used. Allowed values are:"
@@ -55,6 +56,12 @@ echo "                              live"
 echo "                              paper"
 echo
 echo "                          These values are not case-sensitive."
+echo
+echo "  2fatimeoutaction       Indicates what to do if IBC exits due to second factor"
+echo "                         authentication timeout. Allowed values are:"
+echo
+echo "                              restart"
+echo "                              exit"
 echo
 }
 
@@ -95,6 +102,15 @@ E_IBC_INI_NOT_EXIST=6
 E_TWS_VMOPTIONS_NOT_FOUND=7
 E_UNKNOWN_OPERATING_SYSTEM=8
 
+# errorlevel set by IBC if second factor authentication dialog times out and
+# ExitAfterSecondFactorAuthenticationTimeout setting is true
+let E_2FA_DIALOG_TIMED_OUT=$((1111 % 256))
+
+# errorlevel set by IBC if login dialog is not displayed within the time
+# specified in the LoginDialogDisplayTimeout setting
+E_LOGIN_DIALOG_DISPLAY_TIMEOUT=$((1112 % 256))
+
+
 ENTRY_POINT_TWS=ibcalpha.ibc.IbcTws
 ENTRY_POINT_GATEWAY=ibcalpha.ibc.IbcGateway
 
@@ -102,6 +118,7 @@ OS_LINUX=Linux
 OS_OSX='OS X'
 
 entry_point=$ENTRY_POINT_TWS
+program=TWS
 
 if [[ $OSTYPE = [lL]inux* ]]; then
 	os=$OS_LINUX
@@ -117,8 +134,10 @@ for arg
 do
 	if [[ "$arg" = "-g" ]]; then
 		entry_point=$ENTRY_POINT_GATEWAY
+		program=Gateway
 	elif [[ "$arg" = "--gateway" ]]; then
 		entry_point=$ENTRY_POINT_GATEWAY
+		program=Gateway
 	elif [[ "${arg:0:11}" = "--tws-path=" ]]; then
 		tws_path=${arg:11}
 	elif [[ "${arg:0:20}" = "--tws-settings-path=" ]]; then
@@ -139,6 +158,8 @@ do
 		fix_password=${arg:9}
 	elif [[ "${arg:0:7}" = "--mode=" ]]; then
 		mode=${arg:7}
+    elif [[ "${arg:0:15}" = "--on2fatimeout=" ]]; then
+	    twofa_to_action=${arg:15}
 	elif [[ "${arg:0:1}" = "-" ]]; then
 		error_exit $E_INVALID_ARG "Invalid parameter '${arg}'"
 	elif [[ "$tws_version" = "" ]]; then
@@ -149,7 +170,7 @@ do
 done
 
 if [[ -n "${fix_user_id}" || -n "${fix_password}" ]]; then
-	if [[ ! "${entry_point}" = "${ENTRY_POINT_GATEWAY}" ]]; then
+	if [[ ! "${program}" = "GATEWAY" ]]; then
 		error_exit ${E_INVALID_ARG} "FIX user id and FIX password are only valid for the Gateway"
 	fi
 fi
@@ -157,6 +178,12 @@ fi
 mode_upper=$(echo ${mode} | tr '[:lower:]' '[:upper:]')
 if [[ -n "${mode_upper}" && ! "${mode_upper}" = "LIVE" && ! "${mode_upper}" = "PAPER" ]]; then
 	error_exit	${E_INVALID_ARG} "Trading mode set to ${mode} but must be either 'live' or 'paper' (case-insensitive)"
+fi
+
+
+twofa_to_action_upper=$(echo ${twofa_to_action} | tr '[:lower:]' '[:upper:]')
+if [[ -n "${twofa_to_action_upper}" && ! "${twofa_to_action_upper}" = "RESTART" && ! "${twofa_to_action_upper}" = "EXIT" ]]; then
+	error_exit	${E_INVALID_ARG} "2FA timeout action set to ${twofa_to_action} but must be either 'restart' or 'exit' (case-insensitive)"
 fi
 
 echo
@@ -172,6 +199,7 @@ echo
 echo Arguments:
 echo
 echo -e "TWS version = ${tws_version}"
+echo -e "Program = ${program}"
 echo -e "Entry point = ${entry_point}"
 echo -e "--tws-path = ${tws_path}"
 echo -e "--tws-settings-path = ${tws_settings_path}"
@@ -182,7 +210,7 @@ echo -e "--java-path = ${java_path}"
 if [[ -z "${ib_user_id}" && -z "${ib_password}" ]]; then
 	echo -e "--user ="
 	echo -e "--pw ="
-else 
+else
 	echo -e "--user = ***"
 	echo -e "--pw = ***"
 fi
@@ -190,7 +218,7 @@ if [[ "${entry_point}" = "${ENTRY_POINT_GATEWAY}" ]]; then
 	if [[ -z "${fix_user_id}" || -z "${fix_password}" ]]; then
 		echo -e "--fix-user ="
 		echo -e "--fix-pw ="
-	else 
+	else
 		echo -e "--fix-user = ***"
 		echo -e "--fix-pw = ***"
 	fi
@@ -206,69 +234,40 @@ fi
 if [ "$os" = "$OS_LINUX" ]; then
 	if [ "$tws_path" = "" ]; then tws_path=~/Jts ;fi
 	if [ "$tws_settings_path" = "" ]; then tws_settings_path="${tws_path}" ;fi
-elif [ "$os" = "$OS_OSX" ]; then
+	tws_program_path="${tws_path}/${tws_version}"
+	gateway_program_path="${tws_path}/ibgateway/${tws_version}"
+else
 	if [ "$tws_path" = "" ]; then tws_path=~/Applications ;fi
 	if [ "$tws_settings_path" = "" ]; then tws_settings_path=~/Jts ;fi
+	tws_program_path="${tws_path}/Trader Workstation ${tws_version}"
+	gateway_program_path="${tws_path}/IB Gateway ${tws_version}"
 fi
 if [ "$ibc_path" = "" ]; then ibc_path=/opt/ibc ;fi
 if [ "$ibc_ini" = "" ]; then ibc_ini=~/ibc/config.ini ;fi
 
-# In the following we try to use the correct .vmoptions file for the chosen entrypoint
-# Note that uninstalling TWS or Gateway leaves the relevant .vmoption file in place, so
-# we can still use the correct one.
-
-if [[ "$os" = "$OS_LINUX" ]]; then
-	tws_vmoptions="${tws_path}/${tws_version}/tws.vmoptions"
-	tws_jars="${tws_path}/${tws_version}/jars"
-	tws_install4j="${tws_path}/${tws_version}/.install4j"
-
-	gateway_vmoptions="${tws_path}/ibgateway/${tws_version}/ibgateway.vmoptions" 
-	gateway_jars="${tws_path}/ibgateway/${tws_version}/jars"
-	gateway_install4j="${tws_path}/ibgateway/${tws_version}/.install4j"
-elif [[ "$os" = "$OS_OSX" ]]; then
-	tws_vmoptions=~/Jts/tws-${tws_version}.vmoptions
-	tws_jars="${tws_path}/Trader Workstation ${tws_version}/jars"
-	tws_install4j="${tws_path}/Trader Workstation ${tws_version}/.install4j"
-
-	gateway_vmoptions=~/Jts/ibgateway-${tws_version}.vmoptions
-	gateway_jars="${tws_path}/IB Gateway ${tws_version}/jars"
-	gateway_install4j="${tws_path}/IB Gateway ${tws_version}/.install4j"
+if [[ "${program}" = "TWS" ]] ; then
+	program_path="${tws_program_path}"
+	alt_program_path="${gateway_program_path}"
+	vmoptions_source="${program_path}/tws.vmoptions"
+	alt_vmoptions_source="${alt_program_path}/ibgateway.vmoptions"
+else
+	program_path="${gateway_program_path}"
+	alt_program_path="${tws_program_path}"
+	vmoptions_source="${program_path}/ibgateway.vmoptions"
+	alt_vmoptions_source="${alt_program_path}/tws.vmoptions"
 fi
 
-if [[ "${entry_point}" = "${ENTRY_POINT_TWS}" ]]; then
-	if [[ -e "${tws_vmoptions}" ]]; then
-		vmoptions_source="${tws_vmoptions}"
-	elif [[ -e "${gateway_vmoptions}" ]]; then
-		vmoptions_source="${gateway_vmoptions}"
-	fi 
-
-	if [[ -e "${tws_jars}" ]]; then
-		jars="${tws_jars}"
-		install4j="${tws_install4j}"
-	else 
-		jars="${gateway_jars}"
-		install4j="${gateway_install4j}"
-	fi
+if [[ ! -e "${program_path}/jars" ]]; then
+	program_path="${alt_program_path}"
+	vmoptions_source="${alt_vmoptions_source}"
 fi
-if [[ "${entry_point}" = "${ENTRY_POINT_GATEWAY}" ]]; then
-	if [[ -e "${gateway_vmoptions}" ]]; then
-		vmoptions_source="${gateway_vmoptions}"
-	elif [[ -e "${tws_vmoptions}" ]]; then
-		vmoptions_source="${tws_vmoptions}"
-	fi
-
-	if [[ -e "${gateway_jars}" ]]; then
-		jars="${gateway_jars}"
-		install4j="${gateway_install4j}"
-	else
-		jars="${tws_jars}"
-		install4j="${tws_install4j}"
-	fi
-fi
+jars="${program_path}/jars"
+install4j="${program_path}/.install4j"
+	
 
 if [[ ! -e "$jars" ]]; then
-	error_exit $E_TWS_VERSION_NOT_INSTALLED "TWS version $tws_version is not installed: can't find $jars" \
-	                                        "You must install the offline version of TWS/Gateway" \
+	error_exit $E_TWS_VERSION_NOT_INSTALLED "Offline TWS/Gateway version $tws_version is not installed: can't find jars folder" \
+	                                        "Make sure you install the offline version of TWS/Gateway" \
                                             "IBC does not work with the auto-updating TWS/Gateway"
 fi
 
@@ -281,12 +280,12 @@ if [[ ! -e "$ibc_ini" ]]; then
 fi
 
 if [[ ! -e "$vmoptions_source" ]]; then
-	error_exit $E_TWS_VMOPTIONS_NOT_FOUND "$vmoptions_source does not exist"
+	error_exit $E_TWS_VMOPTIONS_NOT_FOUND "Neither tws.vmoptions nor ibgateway.vmoptions could be found"
 fi
 
 if [[ -n "$java_path" ]]; then
 	if [[ ! -e "$java_path/java" ]]; then
-		error_exit $E_NO_JAVA "$java_path/java does not exist"
+		error_exit $E_NO_JAVA "Java installaton at $java_path/java does not exist"
 	fi
 fi
 
@@ -301,7 +300,7 @@ for jar in "${jars}"/*.jar; do
 	fi
 	ibc_classpath="${ibc_classpath}${jar}"
 done
-ibc_classpath="${ibc_classpath}:${ibc_path}/IBC.jar"
+ibc_classpath="${ibc_classpath}:$install4j/i4jruntime.jar:${ibc_path}/IBC.jar"
 
 echo -e "Classpath=$ibc_classpath"
 echo
@@ -312,15 +311,45 @@ echo Generating the JAVA VM options
 
 declare -a vm_options
 index=0
-while read line; do
-	if [[ -n ${line} && ! "${line:0:1}" = "#" && ! "${line:0:2}" = "-D" ]]; then
-		vm_options[$index]="$line"
-		((index++))
-	fi
-done < <( cat "$vmoptions_source" )
+if [[ "$os" = "$OS_LINUX" ]]; then
+	while read line; do
+		if [[ -n ${line} && ! "${line:0:1}" = "#" && ! "${line:0:2}" = "-D" ]]; then
+			vm_options[$index]="$line"
+			((index++))
+		fi
+	done <<< $(cat ${vmoptions_source})
+elif [[ "$os" = "$OS_OSX" ]]; then
+	while read line; do
+		if [[ -n ${line} && ! "${line:0:1}" = "#" && ! "${line:0:2}" = "-D" ]]; then
+			vm_options[$index]="$line"
+			((index++))
+		fi
+	done < <( cat "$vmoptions_source" )
+fi
 
 java_vm_options=${vm_options[*]}
-echo -e "Java VM Options=$java_vm_options"
+java_vm_options="$java_vm_options -Dtwslaunch.autoupdate.serviceImpl=com.ib.tws.twslaunch.install4j.Install4jAutoUpdateService"
+java_vm_options="$java_vm_options -Dchannel=latest"
+java_vm_options="$java_vm_options -Dexe4j.isInstall4j=true"
+java_vm_options="$java_vm_options -Dinstall4jType=standalone"
+java_vm_options="$java_vm_options -DjtsConfigDir=${tws_settings_path}"
+
+function find_auto_restart {
+	autorestart_path=$(find $tws_settings_path -type f -name "autorestart")
+	if [[ -n $autorestart_path ]]; then
+		autorestart_path=$(echo $autorestart_path | xargs dirname | xargs basename)
+		if [ $autorestart_path != "." ]; then
+			echo " -Drestart=${autorestart_path}"
+		else
+			echo ""
+		fi
+	fi
+}
+
+autorestart_option=$(find_auto_restart)
+
+
+echo -e "Java VM Options=$java_vm_options$autorestart_option"
 echo
 
 #======================== Determine the location of java executable ========
@@ -355,6 +384,9 @@ if [[ "$os" = "$OS_LINUX" ]]; then
 	fi
 elif [[ "$os" = "$OS_OSX" ]]; then
 	java_path="$install4j/jre.bundle/Contents/Home/jre/bin"
+	if [[ ! -e "$java_path/java" ]]; then
+		java_path="$install4j/jre.bundle/Contents/Home/bin"
+	fi
 fi
 
 # alternatively use installed java, if it's from oracle (openJDK causes problems with TWS)
@@ -368,7 +400,7 @@ if [[ ! -n "$java_path" ]]; then
 	fi
 
 	if [[ "$system_java" ]]; then
-		if [[ $($system_java -XshowSettings:properties -version 2>&1) == *"Java(TM) SE Runtime Environment"* ]]; then
+		if [[ $($system_java -XshowSettings:properties -version 2>&1) = *"Java(TM) SE Runtime Environment"* ]]; then
 			java_path=$(dirname $(which $system_java))
 		else
 			>&2 echo "System java $system_java is not from Oracle, won't use it"
@@ -398,39 +430,77 @@ elif [[ -n $got_api_credentials ]]; then
 		hidden_credentials="*** ***"
 fi
 
-if [[ "$entry_point" = "$ENTRY_POINT_TWS" ]]; then
-	program=TWS
-else
-	program=Gateway
-fi
-echo "Starting $program with this command:"
-echo -e "\"$java_path/java\" -cp \"$ibc_classpath\" $java_vm_options $entry_point \"$ibc_ini\" $hidden_credentials ${mode}"
-echo
-
 # prevent other Java tools interfering with IBC
 JAVA_TOOL_OPTIONS=
 
 pushd "$tws_settings_path" > /dev/null
 
-# forward signals (see https://veithen.github.io/2014/11/16/sigterm-propagation.html)
-trap 'kill -TERM $PID' TERM INT
-
-if [[ -n $got_fix_credentials && -n $got_api_credentials ]]; then
-	"$java_path/java" -cp "$ibc_classpath" $java_vm_options $entry_point "$ibc_ini" "$fix_user_id" "$fix_password" "$ib_user_id" "$ib_password" ${mode} &
-elif  [[ -n $got_fix_credentials ]]; then
-	"$java_path/java" -cp "$ibc_classpath" $java_vm_options $entry_point "$ibc_ini" "$fix_user_id" "$fix_password" ${mode} &
-elif [[ -n $got_api_credentials ]]; then
-	"$java_path/java" -cp "$ibc_classpath" $java_vm_options $entry_point "$ibc_ini" "$ib_user_id" "$ib_password" ${mode} &
-else
-	"$java_path/java" -cp "$ibc_classpath" $java_vm_options $entry_point "$ibc_ini" ${mode} &
+echo "Renaming IB's TWS or Gateway start script to prevent restart without IBC"
+if [[ "$os" = "$OS_LINUX" ]]; then
+	if [[ -e "${program_path}/tws" ]]; then mv "${program_path}/tws" "${program_path}/tws1"; fi
+	if [[ -e "${program_path}/ibgateway" ]]; then mv "${program_path}/ibgateway" "${program_path}/ibgateway1"; fi
+elif [[ "$os" = "$OS_OSX" ]]; then
+	if [[ -e "${program_path}/Trader Workstation ${tws_version}.app" ]]; then mv "${program_path}/Trader Workstation ${tws_version}.app" "${program_path}/Trader Workstation ${tws_version}-1.app"; fi
+	if [[ -e "${program_path}/IB Gateway ${tws_version}.app" ]]; then mv "${program_path}/IB Gateway ${tws_version}.app" "${program_path}/IB Gateway ${tws_version}-1.app"; fi
 fi
+echo
 
-PID=$!
-wait $PID
-trap - TERM INT
-wait $PID
+while :
+do
+	echo "Starting $program with this command:"
+	echo -e "\"$java_path/java\" -cp \"$ibc_classpath\" $java_vm_options$autorestart_option $entry_point \"$ibc_ini\" $hidden_credentials ${mode}"
+	echo
 
-exit_code=$?
+	# forward signals (see https://veithen.github.io/2014/11/16/sigterm-propagation.html)
+	trap 'kill -TERM $PID' TERM INT
+
+	if [[ -n $got_fix_credentials && -n $got_api_credentials ]]; then
+		"$java_path/java" -cp "$ibc_classpath" $java_vm_options$autorestart_option $entry_point "$ibc_ini" "$fix_user_id" "$fix_password" "$ib_user_id" "$ib_password" ${mode} &
+	elif  [[ -n $got_fix_credentials ]]; then
+		"$java_path/java" -cp "$ibc_classpath" $java_vm_options$autorestart_option $entry_point "$ibc_ini" "$fix_user_id" "$fix_password" ${mode} &
+	elif [[ -n $got_api_credentials ]]; then
+		"$java_path/java" -cp "$ibc_classpath" $java_vm_options$autorestart_option $entry_point "$ibc_ini" "$ib_user_id" "$ib_password" ${mode} &
+	else
+		"$java_path/java" -cp "$ibc_classpath" $java_vm_options$autorestart_option $entry_point "$ibc_ini" ${mode} &
+	fi
+
+	PID=$!
+	wait $PID
+	trap - TERM INT
+	wait $PID
+
+	exit_code=$(($? % 256))
+	echo "IBC returned exit status $exit_code"
+
+	if [[ $exit_code -eq $E_LOGIN_DIALOG_DISPLAY_TIMEOUT ]]; then 
+		:
+	else
+		autorestart_option=$(find_auto_restart)
+		if [[ -n $autorestart_option ]]; then
+			# restart using the TWS/Gateway-generated autorestart file
+			:
+		elif [[ $exit_code -ne $E_2FA_DIALOG_TIMED_OUT  ]]; then 
+			break;
+		elif [[ ${twofa_to_action_upper} !=  "RESTART" ]]; then 
+			break; 
+		fi
+	fi
+	
+	# wait a few seconds before restarting
+	echo IBC will restart shortly
+	echo sleep 2
+done
+
+echo "Renaming TWS or Gateway .exe file to original name"
+if [[ "$os" = "$OS_LINUX" ]]; then
+	if [[ -e "${program_path}/tws1" ]]; then mv "${program_path}/tws1" "${program_path}/tws"; fi
+	if [[ -e "${program_path}/ibgateway1" ]]; then mv "${program_path}/ibgateway1" "${program_path}/ibgateway"; fi
+elif [[ "$os" = "$OS_OSX" ]]; then
+	if [[ -e "${program_path}/Trader Workstation ${tws_version}.app-1" ]]; then mv "${program_path}/Trader Workstation ${tws_version}.app-1" "${program_path}/Trader Workstation ${tws_version}.app"; fi
+	if [[ -e "${program_path}/IB Gateway ${tws_version}.app-1" ]]; then mv "${program_path}/IB Gateway ${tws_version}.app-1" "${program_path}/IB Gateway ${tws_version}.app"; fi
+fi
+echo
+
 echo "$program finished"
 echo
 

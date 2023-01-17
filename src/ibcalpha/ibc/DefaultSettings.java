@@ -34,15 +34,15 @@ public class DefaultSettings extends Settings {
     public DefaultSettings() {
         load(generateDefaultIniPath());
     }
-    
+
     public DefaultSettings(String[] args) {
         load(getSettingsPath(args));
     }
-    
+
     public DefaultSettings(String path) {
         load(path);
     }
-    
+
     private void load(String path) {
         this.path = path;
         props.clear();
@@ -51,6 +51,14 @@ public class DefaultSettings extends Settings {
             InputStream is = new BufferedInputStream(new FileInputStream(f));
             props.load(is);
             is.close();
+
+            Utils.logRawToConsole("IBC Settings:");
+            Object[] keys = props.stringPropertyNames().toArray();
+            java.util.Arrays.sort(keys);
+            for (Object key : keys){
+                Utils.logRawToConsole("    " + key + "=" + getSettingSanitisedValue(key.toString()));
+            }
+            Utils.logRawToConsole("End IBC Settings\n" );
         } catch (FileNotFoundException e) {
             Utils.logToConsole("Properties file " + path + " not found");
         } catch (IOException e) {
@@ -60,6 +68,16 @@ public class DefaultSettings extends Settings {
         }
     }
     
+    private String getSettingSanitisedValue(String key) {
+        if (key.equalsIgnoreCase("FIXLoginId") ||
+                key.equalsIgnoreCase("FIXPassword") ||
+                key.equalsIgnoreCase("IbLoginId") ||
+                key.equalsIgnoreCase("IbPassword")) {
+            return "***";
+        }
+        return props.getProperty(key.toString());
+    }
+
     static String generateDefaultIniPath() {
         if (System.getProperty("os.name").startsWith("Windows")) {
             return System.getenv("HOMEDRIVE") + 
@@ -69,7 +87,7 @@ public class DefaultSettings extends Settings {
                     "config.ini";
         } else {
             return System.getProperty("user.home") + File.separator + 
-                    "IBC" + File.separator + 
+                    "ibc" + File.separator + 
                     "config.ini";
         }
     }
@@ -128,7 +146,7 @@ public class DefaultSettings extends Settings {
     public String getString(String key,
                             String defaultValue) {
         String value = props.getProperty(key, defaultValue);
-        
+
         // handle key=[empty string] in .ini file 
         if (value.isEmpty()) {
             value = defaultValue;
@@ -150,10 +168,10 @@ public class DefaultSettings extends Settings {
         String value = props.getProperty(key);
 
         // handle key missing or key=[empty string] in .ini file 
-        if (value == null || value.length() == 0) {        
+        if (value == null || value.length() == 0) {
             return defaultValue;
         }
-        
+
         try {
             return Integer.parseInt(value);
         } catch (NumberFormatException e) {
@@ -209,10 +227,10 @@ public class DefaultSettings extends Settings {
         String value = props.getProperty(key);
 
         // handle key missing or key=[empty string] in .ini file 
-        if (value == null || value.length() == 0) {        
+        if (value == null || value.length() == 0) {
             return defaultValue;
         }
-        
+
         try {
             return Double.parseDouble(value);
         } catch (NumberFormatException e) {
@@ -240,10 +258,10 @@ public class DefaultSettings extends Settings {
         String value = props.getProperty(key);
 
         // handle key missing or key=[empty string] in .ini file 
-        if (value == null || value.length() == 0) {        
+        if (value == null || value.length() == 0) {
             return defaultValue;
         }
-        
+
         if (value.equalsIgnoreCase("true")) {
             return true;
         } else if (value.equalsIgnoreCase("yes")) {
@@ -256,5 +274,5 @@ public class DefaultSettings extends Settings {
             return defaultValue;
         }
     }
-    
+
 }

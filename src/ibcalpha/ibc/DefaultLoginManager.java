@@ -21,7 +21,7 @@ package ibcalpha.ibc;
 import javax.swing.JFrame;
 
 public class DefaultLoginManager extends LoginManager {
-    
+
     public DefaultLoginManager() {
         /* don't actually get the credentials yet because the settings 
          * provider might be changed
@@ -29,7 +29,7 @@ public class DefaultLoginManager extends LoginManager {
         fromSettings = true;
         message = "getting username and password from settings";
     }
-    
+
     public DefaultLoginManager(String[] args) {
         if (isFIX()) {
             getTWSUserNameAndPasswordFromArguments(args);
@@ -43,14 +43,14 @@ public class DefaultLoginManager extends LoginManager {
             message = "getting username and password from args";
         }
     }
-    
+
     public DefaultLoginManager(String username, String password) {
         IBAPIUserName = username;
         IBAPIPassword = password;
         fromSettings = false;
         message = "getting username and password from constructor";
     }
-    
+
     public DefaultLoginManager(String FIXUsername, String FIXPassword, String IBAPIUsername, String IBAPIPassword) {
         this.FIXUserName = FIXUsername;
         this.FIXPassword = FIXPassword;
@@ -59,12 +59,12 @@ public class DefaultLoginManager extends LoginManager {
         fromSettings = false;
         message = "getting username and password from constructor (including FIX)";
     }
-    
+
     private final String message;
-    
-    private volatile JFrame loginFrame = null;
-    
-    private boolean fromSettings;
+
+    private volatile AbstractLoginHandler loginHandler = null;
+
+    private final boolean fromSettings;
 
     /**
      * IBAPI username - can either be supplied from the .ini file or as args[1]
@@ -93,7 +93,7 @@ public class DefaultLoginManager extends LoginManager {
      */
     private volatile String FIXPassword;
 
-    
+
     @Override
     public void logDiagnosticMessage(){
         Utils.logToConsole("using default login manager: " + message);
@@ -122,15 +122,25 @@ public class DefaultLoginManager extends LoginManager {
         if (fromSettings) return getTWSUserNameFromSettings();
         return IBAPIUserName;
     }
-    
+
     @Override
     public JFrame getLoginFrame() {
-        return loginFrame;
+        return super.getLoginFrame();
     }
 
     @Override
     public void setLoginFrame(JFrame window) {
-        loginFrame = window;
+        super.setLoginFrame(window);
+    }
+
+    @Override
+    public AbstractLoginHandler getLoginHandler() {
+        return loginHandler;
+    }
+
+    @Override
+    public void setLoginHandler(AbstractLoginHandler handler) {
+        loginHandler = handler;
     }
 
     private static String getFIXPasswordFromSettings() {
@@ -186,7 +196,7 @@ public class DefaultLoginManager extends LoginManager {
             return false;
         }
     }
-    
+
     private static boolean isFIX() {
         return Settings.settings().getBoolean("FIX", false);
     }

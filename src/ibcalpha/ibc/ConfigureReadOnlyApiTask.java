@@ -18,19 +18,14 @@
 
 package ibcalpha.ibc;
 
-import ibcalpha.ibc.ConfigDialogManager;
-import ibcalpha.ibc.ConfigurationAction;
-import ibcalpha.ibc.IbcException;
-import ibcalpha.ibc.MainWindowManager;
-import java.awt.Component;
-import java.awt.Container;
-import javax.swing.*;
+import javax.swing.JCheckBox;
+import javax.swing.JDialog;
 
 public class ConfigureReadOnlyApiTask implements ConfigurationAction{
-    
+
     private final boolean readOnlyApi;
     private JDialog configDialog;
-    
+
     ConfigureReadOnlyApiTask(boolean readOnlyApi) {
         this.readOnlyApi = readOnlyApi;
     }
@@ -39,7 +34,7 @@ public class ConfigureReadOnlyApiTask implements ConfigurationAction{
     public void run() {
         try {
             Utils.logToConsole("Setting ReadOnlyApi");
-            
+
             Utils.selectApiSettings(configDialog);
 
             JCheckBox readOnlyApiCheckbox = SwingUtils.findCheckBox(configDialog, "Read-Only API");
@@ -48,7 +43,7 @@ public class ConfigureReadOnlyApiTask implements ConfigurationAction{
                 Utils.logError("could not find Read-Only API checkbox");
                 return;
             }
-            
+
             if (readOnlyApiCheckbox.isSelected() == readOnlyApi) {
                 Utils.logToConsole("Read-Only API checkbox is already set to: " + readOnlyApi);
             } else {

@@ -36,7 +36,7 @@ class MainWindowFrameHandler implements WindowHandler {
     @Override
     public void handleWindow(Window window, int eventID) {
         if (eventID != WindowEvent.WINDOW_OPENED) return;
-        
+
         MainWindowManager.mainWindowManager().setMainWindow((JFrame) window);
     }
 
@@ -44,7 +44,7 @@ class MainWindowFrameHandler implements WindowHandler {
     public boolean recogniseWindow(Window window) {
         if (! (window instanceof JFrame)) return false;
 
-        return SwingUtils.findMenuItemInAnyMenuBar(window, new String [] {"Help", "About Trader Workstation..."}) != null;
+        return (SwingUtils.findMenuItemInAnyMenuBar(window, new String [] {"File", "Lock Application"}) != null);
     }
 }
 

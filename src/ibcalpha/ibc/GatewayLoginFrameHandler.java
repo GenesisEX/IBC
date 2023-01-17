@@ -20,16 +20,16 @@ package ibcalpha.ibc;
 
 import java.awt.Window;
 import javax.swing.JFrame;
-import javax.swing.JRadioButton;
 import javax.swing.JToggleButton;
 
 final class GatewayLoginFrameHandler extends AbstractLoginHandler {
-    
+
     @Override
     public boolean recogniseWindow(Window window) {
         if (! (window instanceof JFrame)) return false;
 
-        return (SwingUtils.titleContains(window, "IB Gateway") &&
+        return ((SwingUtils.titleContains(window, "IB Gateway") || 
+                    SwingUtils.titleContains(window, "Interactive Brokers Gateway")) &&
                (SwingUtils.findButton(window, "Login") != null ||
                 SwingUtils.findButton(window, "Log In") != null ||          // TWS 974+
                 SwingUtils.findButton(window, "Paper Log In") != null));    // TWS 974+
@@ -43,18 +43,18 @@ final class GatewayLoginFrameHandler extends AbstractLoginHandler {
         }
         return true;
     }
-    
+
     @Override
     protected final boolean preLogin(final Window window, int eventID) throws IbcException {
         boolean result;
         if (Settings.settings().getBoolean("FIX", false)) {
             result = setMissingFIXCredentials(window);
         } else {
-            result =setMissingIBAPICredentials(window);
+            result = setMissingIBAPICredentials(window);
         }
         return result;
     }
-    
+
     private boolean setMissingFIXCredentials(Window window) {
         boolean result = false;
         if (LoginManager.loginManager().FIXUserName().length() == 0) {
@@ -100,7 +100,7 @@ final class GatewayLoginFrameHandler extends AbstractLoginHandler {
         }
         return true;
     }
-    
+
     private void selectGatewayMode(Window window) throws IbcException {
         if (Settings.settings().getBoolean("FIX", false)) {
             switchToFIX(window);
@@ -108,22 +108,22 @@ final class GatewayLoginFrameHandler extends AbstractLoginHandler {
             switchToIBAPI(window);
         }
     }
-    
+
     private void switchToFIX(Window window) throws IbcException {
         JToggleButton button = SwingUtils.findToggleButton(window, "FIX CTCI");
         if (button == null) throw new IbcException("FIX CTCI selector");
-        
+
         if (! button.isSelected()) {
             Utils.logToConsole("Clicking FIX CTCI selector");
             button.doClick();
         }
     }
-    
+
     private void switchToIBAPI(Window window) throws IbcException {
         JToggleButton button = SwingUtils.findToggleButton(window, "IB API");
         if (button == null) button = SwingUtils.findToggleButton(window, "TWS/API") ;
         if (button == null) throw new IbcException("IB API selector");
-        
+
         if (! button.isSelected()) {
             Utils.logToConsole("Clicking FIX CTCI selector");
             button.doClick();

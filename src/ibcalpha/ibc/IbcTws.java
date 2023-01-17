@@ -207,7 +207,7 @@ import java.util.concurrent.TimeUnit;
 public class IbcTws {
 
     private IbcTws() { }
-    
+
     public static void main(final String[] args) throws Exception {
         if (Thread.getDefaultUncaughtExceptionHandler() == null) {
             Thread.setDefaultUncaughtExceptionHandler(new ibcalpha.ibc.UncaughtExceptionHandler());
@@ -216,7 +216,7 @@ public class IbcTws {
         setupDefaultEnvironment(args, false);
         load();
     }
-    
+
     static void setupDefaultEnvironment(final String[] args, final boolean isGateway) throws Exception {
         Settings.initialise(new DefaultSettings(args));
         LoginManager.initialise(new DefaultLoginManager(args));
@@ -262,28 +262,37 @@ public class IbcTws {
     }
 
     public static void load() {
-        printVersionInfo();
-        
-        printProperties();
-        
-        Settings.settings().logDiagnosticMessage();
-        LoginManager.loginManager().logDiagnosticMessage();
-        MainWindowManager.mainWindowManager().logDiagnosticMessage();
-        TradingModeManager.tradingModeManager().logDiagnosticMessage();
-        ConfigDialogManager.configDialogManager().logDiagnosticMessage();
-        
-        boolean isGateway = MainWindowManager.mainWindowManager().isGateway();
-        
-        startCommandServer(isGateway);
+        try {
+            printVersionInfo();
 
-        startShutdownTimerIfRequired(isGateway);
+            printProperties();
 
-        createToolkitListener();
-        
-        startSavingTwsSettingsAutomatically();
+            Settings.settings().logDiagnosticMessage();
+            LoginManager.loginManager().logDiagnosticMessage();
+            MainWindowManager.mainWindowManager().logDiagnosticMessage();
+            TradingModeManager.tradingModeManager().logDiagnosticMessage();
+            ConfigDialogManager.configDialogManager().logDiagnosticMessage();
 
-        startTwsOrGateway(isGateway);
-}
+            boolean isGateway = MainWindowManager.mainWindowManager().isGateway();
+
+            startCommandServer(isGateway);
+
+            startShutdownTimerIfRequired(isGateway);
+
+            createToolkitListener();
+
+            startSavingTwsSettingsAutomatically();
+
+            startTwsOrGateway(isGateway);
+        } catch (IllegalStateException e) {
+            if (e.getMessage().equalsIgnoreCase("Shutdown in progress")) {
+                // an exception with this message can occur if a STOP command is
+                // processed by IBC while TWS/Gateway is still in early stages
+                // of initialisation
+                Utils.exitWithoutError();
+            }
+        }
+    }
 
     public static void printVersionInfo() {
         Utils.logToConsole("version: " + IbcVersionInfo.IBC_VERSION);
@@ -294,11 +303,10 @@ public class IbcTws {
     }
 
     private static List<WindowHandler> createWindowHandlers() {
-        List<WindowHandler> windowHandlers = new ArrayList<WindowHandler>();
+        List<WindowHandler> windowHandlers = new ArrayList<>();
 
         windowHandlers.add(new AcceptIncomingConnectionDialogHandler());
         windowHandlers.add(new BlindTradingWarningDialogHandler());
-        windowHandlers.add(new ExitSessionFrameHandler());
         windowHandlers.add(new LoginFrameHandler());
         windowHandlers.add(new GatewayLoginFrameHandler());
         windowHandlers.add(new MainWindowFrameHandler());
@@ -314,15 +322,28 @@ public class IbcTws {
         windowHandlers.add(new ExistingSessionDetectedDialogHandler());
         windowHandlers.add(new ApiChangeConfirmationDialogHandler());
         windowHandlers.add(new SplashFrameHandler());
+
+        // this line must come before the one for SecurityCodeDialogHandler
+        // because both contain an "Enter Read Only" button
+        windowHandlers.add(SecondFactorAuthenticationDialogHandler.getInstance());
         windowHandlers.add(new SecurityCodeDialogHandler());
+        
         windowHandlers.add(new ReloginDialogHandler());
         windowHandlers.add(new NonBrokerageAccountDialogHandler());
         windowHandlers.add(new ExitConfirmationDialogHandler());
         windowHandlers.add(new TradingLoginHandoffDialogHandler());
+        windowHandlers.add(new LoginFailedDialogHandler());
+        windowHandlers.add(new TooManyFailedLoginAttemptsDialogHandler());
+        windowHandlers.add(new ShutdownProgressDialogHandler());
+        windowHandlers.add(new BidAskLastSizeDisplayUpdateDialogHandler());
+        windowHandlers.add(new LoginErrorDialogHandler());
+        windowHandlers.add(new CryptoOrderConfirmationDialogHandler());
+        windowHandlers.add(new AutoRestartConfirmationDialog());
+                
         
         return windowHandlers;
     }
-    
+
     private static Date getShutdownTime() {
         String shutdownTimeSetting = Settings.settings().getString("ClosedownAt", "");
         if (shutdownTimeSetting.length() == 0) {
@@ -374,7 +395,7 @@ public class IbcTws {
     private static String getJtsIniFilePath() {
         return getTWSSettingsDirectory() + File.separatorChar + "jts.ini";
     }
-    
+
     private static String getTWSSettingsDirectory() {
         String path = Settings.settings().getString("IbDir", System.getProperty("user.dir"));
         try {
@@ -395,15 +416,26 @@ public class IbcTws {
         Utils.logRawToConsole("------------------------------------------------------------");
         while (i.hasMoreElements()) {
             String props = (String) i.nextElement();
-            Utils.logRawToConsole(props + " = " + (String) p.get(props));
+            String vals = (String) p.get(props);
+            if (props.equals("sun.java.command")) {
+                //hide credentials 
+                String[] args = vals.split(" ");
+                for (int j = 2; j < args.length - 1; j++) {
+                    args[j] = "***";
+                }
+                vals = String.join(" ", args);
+            }
+            Utils.logRawToConsole(props + " = " + vals);
         }
         Utils.logRawToConsole("------------------------------------------------------------");
     }
-    
+
     private static void startGateway() {
         String[] twsArgs = new String[1];
         twsArgs[0] = getTWSSettingsDirectory();
         try {
+            Utils.logToConsole("Starting Gateway");
+            LoginManager.loginManager().startSession();
             ibgateway.GWClient.main(twsArgs);
         } catch (Throwable t) {
             Utils.logError("Can't find the Gateway entry point: ibgateway.GWClient.main. Gateway is not correctly installed.");
@@ -424,7 +456,7 @@ public class IbcTws {
                             " will be shut down at " +
                            (new SimpleDateFormat("yyyy/MM/dd HH:mm")).format(shutdownTime));
             MyScheduledExecutorService.getInstance().schedule(() -> {
-                MyCachedThreadPool.getInstance().execute(new StopTask(null));
+                MyCachedThreadPool.getInstance().execute(new StopTask(null, isGateway));
             }, delay, TimeUnit.MILLISECONDS);
         }
     }
@@ -436,6 +468,8 @@ public class IbcTws {
         String[] twsArgs = new String[1];
         twsArgs[0] = getTWSSettingsDirectory();
         try {
+            Utils.logToConsole("Starting TWS");
+            LoginManager.loginManager().startSession();
             jclient.LoginFrame.main(twsArgs);
         } catch (Throwable t) {
             Utils.logError("Can't find the TWS entry point: jclient.LoginFrame.main; TWS is not correctly installed.");
@@ -443,7 +477,7 @@ public class IbcTws {
             Utils.exitWithError(ErrorCodes.ERROR_CODE_CANT_FIND_ENTRYPOINT);
         }
     }
-    
+
     private static void startTwsOrGateway(boolean isGateway) {
         Utils.logToConsole("TWS Settings directory is: " + getTWSSettingsDirectory());
         JtsIniManager.initialise(getJtsIniFilePath());
@@ -455,14 +489,30 @@ public class IbcTws {
 
         int portNumber = Settings.settings().getInt("OverrideTwsApiPort", 0);
         if (portNumber != 0) (new ConfigurationTask(new ConfigureTwsApiPortTask(portNumber))).executeAsync();
-        
+
         if (!Settings.settings().getString("ReadOnlyApi", "").equals("")) {
             (new ConfigurationTask(new ConfigureReadOnlyApiTask(Settings.settings().getBoolean("ReadOnlyApi",true)))).executeAsync();
         }
 
+        String sendMarketDataInLots = Settings.settings().getString("SendMarketDataInLotsForUSstocks", "");
+        if (!sendMarketDataInLots.equals("")) {
+            (new ConfigurationTask(new ConfigureSendMarketDataInLotsForUSstocksTask(Settings.settings().getBoolean("SendMarketDataInLotsForUSstocks", true)))).executeAsync();
+        }
+        
+        String autoLogoffTime = Settings.settings().getString("AutoLogoffTime", "");
+        String autoRestartTime = Settings.settings().getString("AutoRestartTime", "");
+        if (!autoRestartTime.equals("")) {
+            (new ConfigurationTask(new ConfigureAutoLogoffOrRestartTimeTask("Auto restart", autoRestartTime))).executeAsync();
+            if (!autoLogoffTime.equals("")) {
+                Utils.logToConsole("AutoLogoffTime is ignored because AutoRestartTime is also set");
+            }
+        } else if (!autoLogoffTime.equals("")) {
+            (new ConfigurationTask(new ConfigureAutoLogoffOrRestartTimeTask("Auto logoff", autoLogoffTime))).executeAsync();
+        }
+
         Utils.sendConsoleOutputToTwsLog(!Settings.settings().getBoolean("LogToConsole", false));
     }
-    
+
     private static void startSavingTwsSettingsAutomatically() {
         TwsSettingsSaver.getInstance().initialise();
     }

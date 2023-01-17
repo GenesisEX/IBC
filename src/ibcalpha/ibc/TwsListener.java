@@ -31,76 +31,154 @@ class TwsListener
 
     private final List<WindowHandler> windowHandlers;
 
-    private final String logComponents;
+    private static String logStructureScope;
+    private static String logStructureWhen;
 
     TwsListener (List<WindowHandler> windowHandlers) {
         this.windowHandlers = windowHandlers;
-
-        String logComponentsSetting =  Settings.settings().getString("LogComponents", "never").toLowerCase();
-        switch (logComponentsSetting) {
-            case "activate":
-            case "open":
-            case "never":
-                logComponents = logComponentsSetting;
-                break;
-            case "yes":
-            case "true":
-                logComponents="open";
-                break;
-            case "no":
-            case "false":
-                logComponents="never";
-                break;
-            default:
-                logComponents="never";
-                Utils.logError("the LogComponents setting is invalid.");
-                break;
-        }
+        getLogStructureParameters();
     }
 
     @Override
     public void eventDispatched(AWTEvent event) {
-        int eventID = event.getID();
+        try {
+            final int eventID = event.getID();
 
-        Window window =((WindowEvent) event).getWindow();
+            final Window window;
+            window = ((WindowEvent) event).getWindow();
 
-        if (eventID == WindowEvent.WINDOW_OPENED ||
-                eventID == WindowEvent.WINDOW_ACTIVATED ||
-                eventID == WindowEvent.WINDOW_CLOSING ||
-                eventID == WindowEvent.WINDOW_CLOSED || 
-                eventID == WindowEvent.WINDOW_ICONIFIED ||
-                eventID == WindowEvent.WINDOW_DEICONIFIED) {
-            logWindow(window, eventID);
-        }
+            GuiDeferredExecutor.instance().execute(() -> {
+                try{
+                    logWindow(window, eventID);
 
-        for (WindowHandler wh : windowHandlers) {
-            if (wh.filterEvent(window, eventID) && wh.recogniseWindow(window))  {
-                wh.handleWindow(window, eventID);
-                break;
-            }
-        }
+                    for (WindowHandler wh : windowHandlers) {
+                        if (wh.recogniseWindow(window))  {
+                                logWindowStructure(window, eventID, true);
+                                if (wh.filterEvent(window, eventID)) wh.handleWindow(window, eventID);
+                            return;
+                        }
+                    }
 
-    }
-
-    private void logWindow(Window window, int eventID) {
-        String event = SwingUtils.windowEventToString(eventID);
-
-        if (window instanceof JFrame) {
-            Utils.logToConsole("detected frame entitled: " + ((JFrame) window).getTitle() + "; event=" + event);
-        } else if (window instanceof JDialog) {
-            Utils.logToConsole("detected dialog entitled: " + ((JDialog) window).getTitle() + "; event=" + event);
-        } else {
-            Utils.logToConsole("detected window: type=" + window.getClass().getName() + "; event=" + event);
-        }
-        
-        if ((eventID == WindowEvent.WINDOW_OPENED && (logComponents.equals("open") || logComponents.equals("activate")))
-            ||
-            (eventID == WindowEvent.WINDOW_ACTIVATED && logComponents.equals("activate")))
-        {
-            Utils.logRawToConsole(SwingUtils.getWindowStructure(window));
+                    logWindowStructure(window, eventID, false);
+                } catch (Throwable e) {
+                    Utils.exitWithException(ErrorCodes.ERROR_CODE_UNHANDLED_EXCEPTION, e);
+                }
+            });
+        } catch (Throwable e) {
+            Utils.exitWithException(ErrorCodes.ERROR_CODE_UNHANDLED_EXCEPTION, e);
         }
     }
     
+    private static void getLogStructureParameters() {
+        // legacy deprecated setting overrides explicit values of LogStructureScope 
+        // and LogStructureWhen
+        final String logComponentsSetting = Settings.settings().getString("LogComponents", "ignore").toLowerCase();
+        
+        logStructureScope = getLogStructureScope(logComponentsSetting);
+        logStructureWhen = getLogStructureWhen(logComponentsSetting);
+    }
+    
+    private static String getLogStructureScope(String logComponentsSetting) {
+        if (logComponentsSetting.equals("ignore")) {
+            logStructureScope = Settings.settings().getString("LogStructureScope", "known").toLowerCase();
+        } else {
+            logStructureScope = "all";
+        }
+
+        switch (logStructureScope) {
+            case "known":
+            case "unknown":
+            case "untitled":
+            case "all":
+                break;
+            default:
+                Utils.logError("the LogStructureScope setting '" + logStructureScope + "' is invalid.");
+                logStructureScope = "known";
+        }
+        
+        return logStructureScope;
+    }
+    
+    private static String getLogStructureWhen(String logComponentsSetting) {
+        if (logComponentsSetting.equals("ignore")) {
+            logStructureWhen = Settings.settings().getString("LogStructureWhen", "never").toLowerCase();
+        } else {
+            logStructureWhen = logComponentsSetting;
+        }
+
+        switch (logStructureWhen) {
+            case "activate":
+            case "open":
+            case "openclose":
+            case "never":
+                break;
+            case "yes":
+            case "true":
+                logStructureWhen = "open";
+                break;
+            case "no":
+            case "false":
+                logStructureWhen = "never";
+                break;
+
+            // allow window event names
+            case "activated":
+            case "closed":
+            case "closing":
+            case "deactivated":
+            case "deiconified":
+            case "focused":
+            case "iconified":
+            case "lost focus":
+            case "opened":
+            case "state changed":
+                break;
+
+            default:
+                Utils.logError("the LogStructureWhen setting is invalid: " + logStructureWhen);
+                logStructureWhen = "never";
+        }
+        
+        return logStructureWhen;
+    }
+
+    static void logWindow(Window window, int eventID) {
+        Utils.logToConsole("detected " + getWindowTypeAndTitle(window) + "; event=" + SwingUtils.windowEventToString(eventID));
+    }
+
+    private static String getWindowTypeAndTitle(Window window) {
+        if (window == null) throw new NullPointerException("window is null");
+        if (window instanceof JFrame) {
+            return "frame entitled: " + SwingUtils.getWindowTitle(window);
+        } else if (window instanceof JDialog) {
+            return "dialog entitled: " + SwingUtils.getWindowTitle(window);
+        } else {
+            return "window: type=" + window.getClass().getName();
+        }
+    }
+
+    static void logWindowStructure(Window window, int eventID, boolean windowKnown) {
+        if (logStructureScope.equals("known") && !windowKnown) {
+            return;
+        } else if (logStructureScope.equals("unknown") && windowKnown) {
+            return;
+        } else if (logStructureScope.equals("untitled") && 
+                !SwingUtils.getWindowTitle(window).equals(SwingUtils.NO_TITLE)) {
+            return;
+        }
+
+        if ((eventID == WindowEvent.WINDOW_OPENED && (logStructureWhen.equals("open") || logStructureWhen.equals("activate")))
+            ||
+            (eventID == WindowEvent.WINDOW_ACTIVATED && logStructureWhen.equals("activate"))
+            ||
+            ((eventID == WindowEvent.WINDOW_OPENED || eventID == WindowEvent.WINDOW_CLOSED) && logStructureWhen.equals("openclose"))
+            ||
+            (logStructureWhen.equalsIgnoreCase(SwingUtils.windowEventToString(eventID))))
+        {
+            Utils.logToConsole("Window structure for " + getWindowTypeAndTitle(window) + "; event=" + SwingUtils.windowEventToString(eventID));
+            Utils.logRawToConsole(SwingUtils.getWindowStructure(window));
+        }
+    }
 }
 
 

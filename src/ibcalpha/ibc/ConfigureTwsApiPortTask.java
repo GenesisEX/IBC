@@ -20,13 +20,15 @@ package ibcalpha.ibc;
 
 import java.awt.Component;
 import java.awt.Container;
-import javax.swing.*;
+import javax.swing.JCheckBox;
+import javax.swing.JDialog;
+import javax.swing.JTextField;
 
 class ConfigureTwsApiPortTask implements ConfigurationAction{
-    
+
     private final int portNumber;
     private JDialog configDialog;
-    
+
     ConfigureTwsApiPortTask(int portNumber) {
         this.portNumber = portNumber;
     }
@@ -35,7 +37,7 @@ class ConfigureTwsApiPortTask implements ConfigurationAction{
     public void run() {
         try {
             Utils.logToConsole("Performing port configuration");
-            
+
             Utils.selectApiSettings(configDialog);
 
             Component comp = SwingUtils.findComponent(configDialog, "Socket port");
@@ -43,7 +45,7 @@ class ConfigureTwsApiPortTask implements ConfigurationAction{
 
             JTextField tf = SwingUtils.findTextField((Container)comp, 0);
             if (tf == null) throw new IbcException("could not find socket port field");
-            
+
             int currentPort = Integer.parseInt(tf.getText());
             if (currentPort == portNumber) {
                 Utils.logToConsole("TWS API socket port is already set to " + tf.getText());
